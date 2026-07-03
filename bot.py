@@ -6,72 +6,59 @@ import datetime
 import os
 import random
 import traceback
-import sys
+
+# ===================== اختبار تحديث الكود =====================
+print("🔥 هذا هو الكود الجديد الذي يعمل بتاريخ 3 يوليو 2026 - الإصدار النهائي")
 
 # ===================== إعدادات البوت =====================
 bot = discord.Bot(intents=discord.Intents.all())
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# ===================== قاعدة البيانات (مسار مضمون) =====================
-# استخدام مسار مؤقت مضمون للكتابة في Railway
-DB_PATH = os.path.join(os.getcwd(), 'data.db')
+# ===================== قاعدة البيانات =====================
+DB_PATH = '/tmp/data.db'  # مسار مؤقت وآمن في Railway
 print(f"📁 مسار قاعدة البيانات: {DB_PATH}")
 
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 c = conn.cursor()
 
-# إنشاء الجداول مع التحقق من وجودها
-try:
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        balance INTEGER DEFAULT 100,
-        last_daily TEXT,
-        total_sales INTEGER DEFAULT 0
-    )''')
-    
-    c.execute('''CREATE TABLE IF NOT EXISTS auctions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        seller_id TEXT,
-        item_name TEXT,
-        quantity INTEGER,
-        price INTEGER,
-        status TEXT DEFAULT 'active'
-    )''')
-    conn.commit()
-    print("✅ تم إنشاء الجداول بنجاح")
-except sqlite3.Error as e:
-    print(f"❌ خطأ في إنشاء الجداول: {e}")
+# إنشاء الجداول
+c.execute('''CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY,
+    balance INTEGER DEFAULT 100,
+    last_daily TEXT,
+    total_sales INTEGER DEFAULT 0
+)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS auctions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id TEXT,
+    item_name TEXT,
+    quantity INTEGER,
+    price INTEGER,
+    status TEXT DEFAULT 'active'
+)''')
+conn.commit()
+print("✅ تم إنشاء الجداول بنجاح")
 
 # ===================== دوال مساعدة =====================
 def get_user(user_id):
-    try:
-        c.execute("SELECT * FROM users WHERE user_id = ?", (str(user_id),))
-        user = c.fetchone()
-        if not user:
-            c.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (str(user_id), 100))
-            conn.commit()
-            return (str(user_id), 100, None, 0)
-        return user
-    except sqlite3.Error as e:
-        print(f"🔥 خطأ في get_user: {e}")
+    c.execute("SELECT * FROM users WHERE user_id = ?", (str(user_id),))
+    user = c.fetchone()
+    if not user:
+        c.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (str(user_id), 100))
+        conn.commit()
         return (str(user_id), 100, None, 0)
+    return user
 
 def update_balance(user_id, amount):
-    try:
-        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, str(user_id)))
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"🔥 خطأ في update_balance: {e}")
+    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, str(user_id)))
+    conn.commit()
 
 def get_active_auctions():
-    try:
-        c.execute("SELECT id, seller_id, item_name, quantity, price FROM auctions WHERE status = 'active' ORDER BY id DESC")
-        return c.fetchall()
-    except sqlite3.Error as e:
-        print(f"🔥 خطأ في get_active_auctions: {e}")
-        return []
+    c.execute("SELECT id, seller_id, item_name, quantity, price FROM auctions WHERE status = 'active' ORDER BY id DESC")
+    return c.fetchall()
 
-# ===================== زر الشراء =====================
+# ===================== زر الشراء المخصص =====================
 class BuyButton(Button):
     def __init__(self, auction_id, price, seller_id, label="شراء الآن"):
         super().__init__(label=label, style=ButtonStyle.success, emoji="🛒", custom_id=f"buy_{auction_id}")
@@ -111,22 +98,21 @@ class BuyButton(Button):
             await interaction.response.send_message(f"❌ حدث خطأ أثناء الشراء: `{e}`", ephemeral=True)
             print(f"🔥 خطأ في زر الشراء: {traceback.format_exc()}")
 
-# ===================== أمر /sell (المُصلح نهائياً) =====================
+# ===================== أمر /sell (مع نافذة منبثقة وأيقونات) =====================
 @bot.slash_command(name="sell", description="💰 اعرض سلعتك للبيع في المزاد")
 async def sell(ctx: discord.ApplicationContext):
+    # إنشاء النافذة المنبثقة
     modal = Modal(title="🏷️ إضافة عرض جديد للمزاد")
-    modal.add_item(InputText(label="اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
-    modal.add_item(InputText(label="السعر بالدولار ($)", placeholder="100", value="100"))
-    modal.add_item(InputText(label="الكمية", placeholder="1", value="1"))
+    modal.add_item(InputText(label="📦 اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
+    modal.add_item(InputText(label="💰 السعر بالدولار ($)", placeholder="100", value="100"))
+    modal.add_item(InputText(label="🔢 الكمية", placeholder="1", value="1"))
 
     async def on_submit(interaction: discord.Interaction):
         try:
-            # قراءة البيانات
             item_name = modal.children[0].value
             price = int(modal.children[1].value)
             quantity = int(modal.children[2].value)
 
-            # التحقق
             if price <= 0 or quantity <= 0:
                 await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أكبر من صفر!", ephemeral=True)
                 return
@@ -137,32 +123,41 @@ async def sell(ctx: discord.ApplicationContext):
             conn.commit()
             auction_id = c.lastrowid
 
-            # رسالة النجاح
+            # رسالة نجاح مع أزرار
             embed = Embed(
                 title="✅ تم عرض سلعتك بنجاح!",
                 description=f"📦 **{item_name}** (x{quantity}) معروض بـ **${price}**\n🆔 رقم العرض: `{auction_id}`",
                 color=Color.green()
             )
             embed.set_footer(text="انتظر حتى يشتريها أحدهم!")
-            await interaction.response.send_message(embed=embed)
+
+            # إضافة أزرار تفاعلية
+            view = View()
+            shop_button = Button(label="🛍️ عرض المتجر", style=ButtonStyle.primary, custom_id="go_to_shop")
+            view.add_item(shop_button)
+
+            await interaction.response.send_message(embed=embed, view=view)
 
         except ValueError:
             await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أرقاماً صحيحة!", ephemeral=True)
-        except sqlite3.Error as db_error:
-            # خطأ في قاعدة البيانات مع تفاصيل كاملة
-            error_msg = f"❌ خطأ في قاعدة البيانات:\n```py\n{db_error}\n```"
-            await interaction.response.send_message(error_msg, ephemeral=True)
-            print(f"🔥 خطأ SQLite في /sell: {traceback.format_exc()}")
         except Exception as e:
-            # أي خطأ آخر مع تفاصيل كاملة
-            error_msg = f"❌ خطأ غير متوقع:\n```py\n{traceback.format_exc()}\n```"
+            # رسالة خطأ مفصلة
+            error_msg = f"❌ خطأ في البوت:\n```py\n{traceback.format_exc()}\n```"
             await interaction.response.send_message(error_msg, ephemeral=True)
             print(f"🔥 خطأ في /sell: {traceback.format_exc()}")
 
     modal.on_submit = on_submit
     await ctx.send_modal(modal)
 
-# ===================== بقية الأوامر (نفسها) =====================
+# ===================== زر عرض المتجر =====================
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    if interaction.type == discord.InteractionType.component:
+        if interaction.data["custom_id"] == "go_to_shop":
+            # استدعاء أمر /shop مباشرة
+            await shop.callback(interaction)
+
+# ===================== بقية الأوامر =====================
 @bot.slash_command(name="shop", description="🛍️ تصفح متجر المزاد الفاخر")
 async def shop(ctx: discord.ApplicationContext):
     try:
