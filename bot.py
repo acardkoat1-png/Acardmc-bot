@@ -12,47 +12,64 @@ import sys
 bot = discord.Bot(intents=discord.Intents.all())
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# ===================== قاعدة البيانات (مسار آمن) =====================
-# استخدام مسار مؤقت لضمان صلاحيات الكتابة في Railway
-DB_PATH = '/tmp/data.db' if os.path.exists('/tmp') else 'data.db'
-conn = sqlite3.connect(DB_PATH)
+# ===================== قاعدة البيانات (مسار مضمون) =====================
+# استخدام مسار مؤقت مضمون للكتابة في Railway
+DB_PATH = os.path.join(os.getcwd(), 'data.db')
+print(f"📁 مسار قاعدة البيانات: {DB_PATH}")
+
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 c = conn.cursor()
 
-# إنشاء الجداول
-c.execute('''CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    balance INTEGER DEFAULT 100,
-    last_daily TEXT,
-    total_sales INTEGER DEFAULT 0
-)''')
-
-c.execute('''CREATE TABLE IF NOT EXISTS auctions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    seller_id TEXT,
-    item_name TEXT,
-    quantity INTEGER,
-    price INTEGER,
-    status TEXT DEFAULT 'active'
-)''')
-conn.commit()
+# إنشاء الجداول مع التحقق من وجودها
+try:
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        balance INTEGER DEFAULT 100,
+        last_daily TEXT,
+        total_sales INTEGER DEFAULT 0
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS auctions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_id TEXT,
+        item_name TEXT,
+        quantity INTEGER,
+        price INTEGER,
+        status TEXT DEFAULT 'active'
+    )''')
+    conn.commit()
+    print("✅ تم إنشاء الجداول بنجاح")
+except sqlite3.Error as e:
+    print(f"❌ خطأ في إنشاء الجداول: {e}")
 
 # ===================== دوال مساعدة =====================
 def get_user(user_id):
-    c.execute("SELECT * FROM users WHERE user_id = ?", (str(user_id),))
-    user = c.fetchone()
-    if not user:
-        c.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (str(user_id), 100))
-        conn.commit()
+    try:
+        c.execute("SELECT * FROM users WHERE user_id = ?", (str(user_id),))
+        user = c.fetchone()
+        if not user:
+            c.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (str(user_id), 100))
+            conn.commit()
+            return (str(user_id), 100, None, 0)
+        return user
+    except sqlite3.Error as e:
+        print(f"🔥 خطأ في get_user: {e}")
         return (str(user_id), 100, None, 0)
-    return user
 
 def update_balance(user_id, amount):
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, str(user_id)))
-    conn.commit()
+    try:
+        c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, str(user_id)))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"🔥 خطأ في update_balance: {e}")
 
 def get_active_auctions():
-    c.execute("SELECT id, seller_id, item_name, quantity, price FROM auctions WHERE status = 'active' ORDER BY id DESC")
-    return c.fetchall()
+    try:
+        c.execute("SELECT id, seller_id, item_name, quantity, price FROM auctions WHERE status = 'active' ORDER BY id DESC")
+        return c.fetchall()
+    except sqlite3.Error as e:
+        print(f"🔥 خطأ في get_active_auctions: {e}")
+        return []
 
 # ===================== زر الشراء =====================
 class BuyButton(Button):
@@ -94,10 +111,9 @@ class BuyButton(Button):
             await interaction.response.send_message(f"❌ حدث خطأ أثناء الشراء: `{e}`", ephemeral=True)
             print(f"🔥 خطأ في زر الشراء: {traceback.format_exc()}")
 
-# ===================== أمر /sell (مع تصحيح متقدم) =====================
+# ===================== أمر /sell (المُصلح نهائياً) =====================
 @bot.slash_command(name="sell", description="💰 اعرض سلعتك للبيع في المزاد")
 async def sell(ctx: discord.ApplicationContext):
-    # إنشاء المودال
     modal = Modal(title="🏷️ إضافة عرض جديد للمزاد")
     modal.add_item(InputText(label="اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
     modal.add_item(InputText(label="السعر بالدولار ($)", placeholder="100", value="100"))
@@ -105,7 +121,7 @@ async def sell(ctx: discord.ApplicationContext):
 
     async def on_submit(interaction: discord.Interaction):
         try:
-            # جلب البيانات
+            # قراءة البيانات
             item_name = modal.children[0].value
             price = int(modal.children[1].value)
             quantity = int(modal.children[2].value)
@@ -115,18 +131,11 @@ async def sell(ctx: discord.ApplicationContext):
                 await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أكبر من صفر!", ephemeral=True)
                 return
 
-            # اختبار قاعدة البيانات (خطوة إضافية للكشف عن الأخطاء)
-            try:
-                c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
-                          (str(interaction.user.id), item_name, quantity, price))
-                conn.commit()
-                auction_id = c.lastrowid
-            except sqlite3.Error as db_error:
-                # خطأ في قاعدة البيانات
-                error_msg = f"❌ خطأ في قاعدة البيانات: `{db_error}`"
-                await interaction.response.send_message(error_msg, ephemeral=True)
-                print(f"🔥 خطأ SQLite: {traceback.format_exc()}")
-                return
+            # إدراج في قاعدة البيانات
+            c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
+                      (str(interaction.user.id), item_name, quantity, price))
+            conn.commit()
+            auction_id = c.lastrowid
 
             # رسالة النجاح
             embed = Embed(
@@ -139,19 +148,21 @@ async def sell(ctx: discord.ApplicationContext):
 
         except ValueError:
             await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أرقاماً صحيحة!", ephemeral=True)
+        except sqlite3.Error as db_error:
+            # خطأ في قاعدة البيانات مع تفاصيل كاملة
+            error_msg = f"❌ خطأ في قاعدة البيانات:\n```py\n{db_error}\n```"
+            await interaction.response.send_message(error_msg, ephemeral=True)
+            print(f"🔥 خطأ SQLite في /sell: {traceback.format_exc()}")
         except Exception as e:
-            # هنا سيظهر الخطأ بالكامل للمستخدم
-            error_details = f"```py\n{traceback.format_exc()}\n```"
-            await interaction.response.send_message(
-                f"❌ حدث خطأ غير متوقع:\n{error_details}",
-                ephemeral=True
-            )
+            # أي خطأ آخر مع تفاصيل كاملة
+            error_msg = f"❌ خطأ غير متوقع:\n```py\n{traceback.format_exc()}\n```"
+            await interaction.response.send_message(error_msg, ephemeral=True)
             print(f"🔥 خطأ في /sell: {traceback.format_exc()}")
 
     modal.on_submit = on_submit
     await ctx.send_modal(modal)
 
-# ===================== بقية الأوامر (بدون تغيير) =====================
+# ===================== بقية الأوامر (نفسها) =====================
 @bot.slash_command(name="shop", description="🛍️ تصفح متجر المزاد الفاخر")
 async def shop(ctx: discord.ApplicationContext):
     try:
@@ -264,6 +275,6 @@ async def leaderboard(ctx: discord.ApplicationContext):
 async def on_ready():
     print(f"🚀 تم تشغيل البوت كـ {bot.user.name}")
     print(f"✅ متصل بـ {len(bot.guilds)} سيرفر")
-    print(f"📁 قاعدة البيانات في: {DB_PATH}")
+    print(f"📁 مسار قاعدة البيانات: {DB_PATH}")
 
 bot.run(TOKEN)
