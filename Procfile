@@ -1,1 +1,1 @@
-worker: python py-cord
+worker: python cord.py
