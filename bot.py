@@ -6,16 +6,19 @@ import datetime
 import os
 import random
 import traceback
+import sys
 
 # ===================== إعدادات البوت =====================
 bot = discord.Bot(intents=discord.Intents.all())
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# ===================== قاعدة البيانات =====================
-conn = sqlite3.connect('data.db')
+# ===================== قاعدة البيانات (مسار آمن) =====================
+# استخدام مسار مؤقت لضمان صلاحيات الكتابة في Railway
+DB_PATH = '/tmp/data.db' if os.path.exists('/tmp') else 'data.db'
+conn = sqlite3.connect(DB_PATH)
 c = conn.cursor()
 
-# إنشاء الجداول مع صلاحية status
+# إنشاء الجداول
 c.execute('''CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     balance INTEGER DEFAULT 100,
@@ -91,9 +94,10 @@ class BuyButton(Button):
             await interaction.response.send_message(f"❌ حدث خطأ أثناء الشراء: `{e}`", ephemeral=True)
             print(f"🔥 خطأ في زر الشراء: {traceback.format_exc()}")
 
-# ===================== أمر /sell (المُصلح) =====================
+# ===================== أمر /sell (مع تصحيح متقدم) =====================
 @bot.slash_command(name="sell", description="💰 اعرض سلعتك للبيع في المزاد")
 async def sell(ctx: discord.ApplicationContext):
+    # إنشاء المودال
     modal = Modal(title="🏷️ إضافة عرض جديد للمزاد")
     modal.add_item(InputText(label="اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
     modal.add_item(InputText(label="السعر بالدولار ($)", placeholder="100", value="100"))
@@ -101,21 +105,28 @@ async def sell(ctx: discord.ApplicationContext):
 
     async def on_submit(interaction: discord.Interaction):
         try:
-            # قراءة البيانات
+            # جلب البيانات
             item_name = modal.children[0].value
             price = int(modal.children[1].value)
             quantity = int(modal.children[2].value)
 
-            # التحقق من القيم
+            # التحقق
             if price <= 0 or quantity <= 0:
                 await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أكبر من صفر!", ephemeral=True)
                 return
 
-            # إدراج البيانات في قاعدة البيانات
-            c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
-                      (str(interaction.user.id), item_name, quantity, price))
-            conn.commit()
-            auction_id = c.lastrowid
+            # اختبار قاعدة البيانات (خطوة إضافية للكشف عن الأخطاء)
+            try:
+                c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
+                          (str(interaction.user.id), item_name, quantity, price))
+                conn.commit()
+                auction_id = c.lastrowid
+            except sqlite3.Error as db_error:
+                # خطأ في قاعدة البيانات
+                error_msg = f"❌ خطأ في قاعدة البيانات: `{db_error}`"
+                await interaction.response.send_message(error_msg, ephemeral=True)
+                print(f"🔥 خطأ SQLite: {traceback.format_exc()}")
+                return
 
             # رسالة النجاح
             embed = Embed(
@@ -129,8 +140,12 @@ async def sell(ctx: discord.ApplicationContext):
         except ValueError:
             await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أرقاماً صحيحة!", ephemeral=True)
         except Exception as e:
-            # هذه الرسالة ستظهر لك الخطأ الحقيقي
-            await interaction.response.send_message(f"❌ خطأ في البوت: `{e}`", ephemeral=True)
+            # هنا سيظهر الخطأ بالكامل للمستخدم
+            error_details = f"```py\n{traceback.format_exc()}\n```"
+            await interaction.response.send_message(
+                f"❌ حدث خطأ غير متوقع:\n{error_details}",
+                ephemeral=True
+            )
             print(f"🔥 خطأ في /sell: {traceback.format_exc()}")
 
     modal.on_submit = on_submit
@@ -249,5 +264,6 @@ async def leaderboard(ctx: discord.ApplicationContext):
 async def on_ready():
     print(f"🚀 تم تشغيل البوت كـ {bot.user.name}")
     print(f"✅ متصل بـ {len(bot.guilds)} سيرفر")
+    print(f"📁 قاعدة البيانات في: {DB_PATH}")
 
 bot.run(TOKEN)
