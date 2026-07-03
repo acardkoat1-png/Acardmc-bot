@@ -5,17 +5,17 @@ import sqlite3
 import datetime
 import os
 import random
-import traceback  # لطباعة تفاصيل الأخطاء
+import traceback
 
 # ===================== إعدادات البوت =====================
 bot = discord.Bot(intents=discord.Intents.all())
-TOKEN = os.getenv('DISCORD_TOKEN')  # من Railway Variables
+TOKEN = os.getenv('DISCORD_TOKEN')
 
 # ===================== قاعدة البيانات =====================
 conn = sqlite3.connect('data.db')
 c = conn.cursor()
 
-# إنشاء الجداول إذا لم تكن موجودة
+# إنشاء الجداول مع صلاحية status
 c.execute('''CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     balance INTEGER DEFAULT 100,
@@ -51,7 +51,7 @@ def get_active_auctions():
     c.execute("SELECT id, seller_id, item_name, quantity, price FROM auctions WHERE status = 'active' ORDER BY id DESC")
     return c.fetchall()
 
-# ===================== زر الشراء المخصص =====================
+# ===================== زر الشراء =====================
 class BuyButton(Button):
     def __init__(self, auction_id, price, seller_id, label="شراء الآن"):
         super().__init__(label=label, style=ButtonStyle.success, emoji="🛒", custom_id=f"buy_{auction_id}")
@@ -73,14 +73,12 @@ class BuyButton(Button):
                 await interaction.response.send_message(f"❌ رصيدك غير كافٍ! تحتاج ${self.price}، لديك ${buyer[1]}", ephemeral=True)
                 return
 
-            # تنفيذ الصفقة
             c.execute("UPDATE auctions SET status = 'sold' WHERE id = ?", (self.auction_id,))
             update_balance(buyer_id, -self.price)
             update_balance(seller_id, self.price)
             c.execute("UPDATE users SET total_sales = total_sales + ? WHERE user_id = ?", (self.price, seller_id))
             conn.commit()
 
-            # رسالة مبهرة
             embed = Embed(
                 title="✅ تمت الصفقة بنجاح!",
                 description=f"🎉 اشترى {interaction.user.mention} السلعة **بـ ${self.price}**",
@@ -93,7 +91,52 @@ class BuyButton(Button):
             await interaction.response.send_message(f"❌ حدث خطأ أثناء الشراء: `{e}`", ephemeral=True)
             print(f"🔥 خطأ في زر الشراء: {traceback.format_exc()}")
 
-# ===================== أمر /shop =====================
+# ===================== أمر /sell (المُصلح) =====================
+@bot.slash_command(name="sell", description="💰 اعرض سلعتك للبيع في المزاد")
+async def sell(ctx: discord.ApplicationContext):
+    modal = Modal(title="🏷️ إضافة عرض جديد للمزاد")
+    modal.add_item(InputText(label="اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
+    modal.add_item(InputText(label="السعر بالدولار ($)", placeholder="100", value="100"))
+    modal.add_item(InputText(label="الكمية", placeholder="1", value="1"))
+
+    async def on_submit(interaction: discord.Interaction):
+        try:
+            # قراءة البيانات
+            item_name = modal.children[0].value
+            price = int(modal.children[1].value)
+            quantity = int(modal.children[2].value)
+
+            # التحقق من القيم
+            if price <= 0 or quantity <= 0:
+                await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أكبر من صفر!", ephemeral=True)
+                return
+
+            # إدراج البيانات في قاعدة البيانات
+            c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
+                      (str(interaction.user.id), item_name, quantity, price))
+            conn.commit()
+            auction_id = c.lastrowid
+
+            # رسالة النجاح
+            embed = Embed(
+                title="✅ تم عرض سلعتك بنجاح!",
+                description=f"📦 **{item_name}** (x{quantity}) معروض بـ **${price}**\n🆔 رقم العرض: `{auction_id}`",
+                color=Color.green()
+            )
+            embed.set_footer(text="انتظر حتى يشتريها أحدهم!")
+            await interaction.response.send_message(embed=embed)
+
+        except ValueError:
+            await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أرقاماً صحيحة!", ephemeral=True)
+        except Exception as e:
+            # هذه الرسالة ستظهر لك الخطأ الحقيقي
+            await interaction.response.send_message(f"❌ خطأ في البوت: `{e}`", ephemeral=True)
+            print(f"🔥 خطأ في /sell: {traceback.format_exc()}")
+
+    modal.on_submit = on_submit
+    await ctx.send_modal(modal)
+
+# ===================== بقية الأوامر (بدون تغيير) =====================
 @bot.slash_command(name="shop", description="🛍️ تصفح متجر المزاد الفاخر")
 async def shop(ctx: discord.ApplicationContext):
     try:
@@ -129,47 +172,6 @@ async def shop(ctx: discord.ApplicationContext):
         await ctx.respond(f"❌ حدث خطأ في المتجر: `{e}`", ephemeral=True)
         print(f"🔥 خطأ في /shop: {traceback.format_exc()}")
 
-# ===================== أمر /sell (مع نظام التقاط الأخطاء) =====================
-@bot.slash_command(name="sell", description="💰 اعرض سلعتك للبيع في المزاد")
-async def sell(ctx: discord.ApplicationContext):
-    modal = Modal(title="🏷️ إضافة عرض جديد للمزاد")
-    modal.add_item(InputText(label="اسم العنصر (مثال: سيف نيثريت)", placeholder="اكتب اسم العنصر..."))
-    modal.add_item(InputText(label="السعر بالدولار ($)", placeholder="100", value="100"))
-    modal.add_item(InputText(label="الكمية", placeholder="1", value="1"))
-
-    async def on_submit(interaction: discord.Interaction):
-        try:
-            item_name = modal.children[0].value
-            price = int(modal.children[1].value)
-            quantity = int(modal.children[2].value)
-
-            if price <= 0 or quantity <= 0:
-                await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أكبر من صفر!", ephemeral=True)
-                return
-
-            c.execute("INSERT INTO auctions (seller_id, item_name, quantity, price) VALUES (?, ?, ?, ?)",
-                      (str(interaction.user.id), item_name, quantity, price))
-            conn.commit()
-            auction_id = c.lastrowid
-
-            embed = Embed(
-                title="✅ تم عرض سلعتك بنجاح!",
-                description=f"📦 **{item_name}** (x{quantity}) معروض بـ **${price}**\n🆔 رقم العرض: `{auction_id}`",
-                color=Color.green()
-            )
-            embed.set_footer(text="انتظر حتى يشتريها أحدهم!")
-            await interaction.response.send_message(embed=embed)
-
-        except ValueError:
-            await interaction.response.send_message("❌ السعر والكمية يجب أن يكونا أرقاماً صحيحة!", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ حدث خطأ في البوت: `{e}`", ephemeral=True)
-            print(f"🔥 خطأ في /sell: {traceback.format_exc()}")
-
-    modal.on_submit = on_submit
-    await ctx.send_modal(modal)
-
-# ===================== أمر /balance =====================
 @bot.slash_command(name="balance", description="💰 اعرض رصيدك الحالي")
 async def balance(ctx: discord.ApplicationContext, member: discord.Member = None):
     try:
@@ -196,7 +198,6 @@ async def balance(ctx: discord.ApplicationContext, member: discord.Member = None
         await ctx.respond(f"❌ حدث خطأ: `{e}`", ephemeral=True)
         print(f"🔥 خطأ في /balance: {traceback.format_exc()}")
 
-# ===================== أمر /daily =====================
 @bot.slash_command(name="daily", description="🎁 احصل على مكافأتك اليومية")
 async def daily(ctx: discord.ApplicationContext):
     try:
@@ -222,7 +223,6 @@ async def daily(ctx: discord.ApplicationContext):
         await ctx.respond(f"❌ حدث خطأ: `{e}`", ephemeral=True)
         print(f"🔥 خطأ في /daily: {traceback.format_exc()}")
 
-# ===================== أمر /leaderboard =====================
 @bot.slash_command(name="leaderboard", description="🏆 أعلى التجار في المملكة")
 async def leaderboard(ctx: discord.ApplicationContext):
     try:
@@ -245,7 +245,6 @@ async def leaderboard(ctx: discord.ApplicationContext):
         await ctx.respond(f"❌ حدث خطأ: `{e}`", ephemeral=True)
         print(f"🔥 خطأ في /leaderboard: {traceback.format_exc()}")
 
-# ===================== تشغيل البوت =====================
 @bot.event
 async def on_ready():
     print(f"🚀 تم تشغيل البوت كـ {bot.user.name}")
